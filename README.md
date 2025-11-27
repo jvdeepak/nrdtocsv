@@ -1,8 +1,8 @@
 <div align="center">
 
 <h3>NRDToCSV</h3>
-  
-![image](https://user-images.githubusercontent.com/14204888/132671281-c7f68d43-cbfa-47da-87db-3092c60ec55c.png)
+
+![NRDToCSV Screenshot](Screenshot.png)
 
 </div>
 
@@ -15,19 +15,31 @@
 1. Download the latest **zip file** with AddOn from [Releases][releases]
 2. Import AddOn into NinjaTrader 8 via `Tools` / `Import` / `NinjaScript Add-On...`
 3. Open NRD to CSV tool via `Tools` / `NRD to CSV`
-5. Press **Convert** button to convert all `*.nrd` replay files (could take some time to proceed)
-6. Check `Documents` \ `NinjaTrader 8` \ `db` \ `replay.csv` folder with the results
+4. Press **Convert** button to convert all `*.nrd` replay files
+5. Check `Documents` \ `NinjaTrader 8` \ `db` \ `replay.csv` folder with the results
 
-## Filter files to convert
+## Selecting Files to Convert
 
-You can specify filenames to convert with semicolon-separated regular expressions (experiment [here][regex]):
+You can select specific files or folders to convert using any of these methods:
 
-- Convert only Gold Commodity futures: `GC`
-- Convert several instruments: `GC; HG; 6E`
-- Convert files with names related only to December 2021: `202112\d{2}`<br>
-  Means: `"2021"` `"12"` `<any 2 digits of Day>`
-- Convert files with names related to all Decembers of Gold Commodity futures: `GC.*\d{4}12\d{2}`<br>
-  Means: `"GC"` `<any chars>` `<any 4 digits of Year>` `"12"` `<any 2 digits of Day>`
+### Using Buttons
+- **Add Folder...** - Browse and select a folder containing `.nrd` files
+- **Add Files...** - Browse and select individual `.nrd` files (multi-select supported)
+- **Remove** - Remove selected items from the list
+- **Clear** - Clear the entire list and output log
+
+### Drag & Drop
+Simply drag folders or `.nrd` files from Windows Explorer onto the file list.
+
+### Convert All
+Leave the file list empty to convert all `.nrd` files in the default replay folder.
+
+## Progress & Cancellation
+
+- Progress is shown immediately when conversion starts
+- Displays: files completed, bytes processed, and estimated time remaining
+- Click **Cancel** to stop conversion at any time (stops within seconds)
+- After completion, click **Close** to exit or **Clear** to start a new batch
 
 ## Converted `*.csv` file format
 
@@ -100,4 +112,3 @@ Feel free to contact me at **@gmail.com**: **eugene.ilyin**
 [license]: /License.txt
 [semver]: http://semver.org
 [market-data]: https://ninjatrader.com/support/forum/forum/ninjatrader-8/platform-technical-support-aa/1067384-more-info-on-marketreplay-dumpmarketdata-marketreplay-dumpmarketdepth
-[regex]: https://regex101.com/r/8EqW6n/2
