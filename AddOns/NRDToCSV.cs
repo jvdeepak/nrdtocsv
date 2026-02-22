@@ -10,6 +10,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Xml.Linq;
+using System.Diagnostics;
 using NinjaTrader.Cbi;
 using NinjaTrader.Core;
 using NinjaTrader.Data;
@@ -75,6 +76,11 @@ namespace NinjaTrader.Gui.NinjaScript
         private Button bRemove;
         private Button bClear;
         private CheckBox cbForceExport;
+        private CheckBox cbEnableParquetPipeline;
+        private CheckBox cbDeleteTempCsv;
+        private TextBox tbParquetRootDir;
+        private TextBox tbParquetBridgeCommand;
+        private TextBox tbParquetBridgeWorkingDir;
         private Button bAnalyze;
         private Button bConvert;
         private TextBox tbOutput;
@@ -113,8 +119,12 @@ namespace NinjaTrader.Gui.NinjaScript
                     {
                         // Save current destination to manifest immediately
                         savedManifest.CsvRootDir = tbCsvRootDir.Text;
-                        savedManifest.Save();
                     }
+
+                    if (!string.IsNullOrEmpty(savedManifest.ParquetRootDir))
+                        tbParquetRootDir.Text = savedManifest.ParquetRootDir;
+
+                    savedManifest.Save();
                 }
                 catch { /* ignore manifest load errors on startup */ }
             };
@@ -130,6 +140,7 @@ namespace NinjaTrader.Gui.NinjaScript
                 {
                     var manifestToSave = new ExportManifest();
                     manifestToSave.CsvRootDir = tbCsvRootDir.Text;
+                    manifestToSave.ParquetRootDir = tbParquetRootDir.Text;
                     manifestToSave.Save();
                 }
                 catch { /* ignore save errors on close */ }
@@ -202,6 +213,53 @@ namespace NinjaTrader.Gui.NinjaScript
                 VerticalAlignment = VerticalAlignment.Center,
             };
 
+            cbEnableParquetPipeline = new CheckBox()
+            {
+                Content = "Enable Parquet pipeline (NRD -> Parquet)",
+                Margin = new Thickness(margin, 0, margin, margin / 2),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            Label lParquetRootDir = new Label()
+            {
+                Foreground = FindResource("FontLabelBrush") as Brush,
+                Margin = new Thickness(margin, 0, margin, 0),
+                Content = "Parquet destination root directory:",
+            };
+            tbParquetRootDir = new TextBox()
+            {
+                Margin = new Thickness(margin, 0, margin, margin / 2),
+                Text = Path.Combine(Globals.UserDataDir, "db", "replay.parquet"),
+            };
+            Label lParquetBridgeCommand = new Label()
+            {
+                Foreground = FindResource("FontLabelBrush") as Brush,
+                Margin = new Thickness(margin, 0, margin, 0),
+                Content = "Bridge command (example: uv run csv-to-parquet-bridge):",
+            };
+            tbParquetBridgeCommand = new TextBox()
+            {
+                Margin = new Thickness(margin, 0, margin, margin / 2),
+                Text = "uv run csv-to-parquet-bridge",
+            };
+            Label lParquetBridgeWorkingDir = new Label()
+            {
+                Foreground = FindResource("FontLabelBrush") as Brush,
+                Margin = new Thickness(margin, 0, margin, 0),
+                Content = "Bridge working directory (csv_to_parquet project):",
+            };
+            tbParquetBridgeWorkingDir = new TextBox()
+            {
+                Margin = new Thickness(margin, 0, margin, margin / 2),
+                Text = "",
+            };
+            cbDeleteTempCsv = new CheckBox()
+            {
+                Content = "Delete temp CSV after successful Parquet conversion",
+                Margin = new Thickness(margin, 0, margin, margin),
+                VerticalAlignment = VerticalAlignment.Center,
+                IsChecked = true,
+            };
+
             StackPanel actionPanel = new StackPanel()
             {
                 Orientation = Orientation.Horizontal,
@@ -240,6 +298,14 @@ namespace NinjaTrader.Gui.NinjaScript
             grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition() { Height = new GridLength(1, GridUnitType.Star) });
             grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
@@ -249,16 +315,32 @@ namespace NinjaTrader.Gui.NinjaScript
             Grid.SetRow(lbSelectedPaths, 3);
             Grid.SetRow(buttonPanel, 4);
             Grid.SetRow(cbForceExport, 5);
-            Grid.SetRow(actionPanel, 6);
-            Grid.SetRow(tbOutput, 7);
-            Grid.SetRow(lProgress, 8);
-            Grid.SetRow(pbProgress, 9);
+            Grid.SetRow(cbEnableParquetPipeline, 6);
+            Grid.SetRow(lParquetRootDir, 7);
+            Grid.SetRow(tbParquetRootDir, 8);
+            Grid.SetRow(lParquetBridgeCommand, 9);
+            Grid.SetRow(tbParquetBridgeCommand, 10);
+            Grid.SetRow(lParquetBridgeWorkingDir, 11);
+            Grid.SetRow(tbParquetBridgeWorkingDir, 12);
+            Grid.SetRow(cbDeleteTempCsv, 13);
+            Grid.SetRow(actionPanel, 14);
+            Grid.SetRow(tbOutput, 15);
+            Grid.SetRow(lProgress, 16);
+            Grid.SetRow(pbProgress, 17);
             grid.Children.Add(lCsvRootDir);
             grid.Children.Add(tbCsvRootDir);
             grid.Children.Add(lSelectedPaths);
             grid.Children.Add(lbSelectedPaths);
             grid.Children.Add(buttonPanel);
             grid.Children.Add(cbForceExport);
+            grid.Children.Add(cbEnableParquetPipeline);
+            grid.Children.Add(lParquetRootDir);
+            grid.Children.Add(tbParquetRootDir);
+            grid.Children.Add(lParquetBridgeCommand);
+            grid.Children.Add(tbParquetBridgeCommand);
+            grid.Children.Add(lParquetBridgeWorkingDir);
+            grid.Children.Add(tbParquetBridgeWorkingDir);
+            grid.Children.Add(cbDeleteTempCsv);
             grid.Children.Add(actionPanel);
             grid.Children.Add(tbOutput);
             grid.Children.Add(lProgress);
@@ -389,6 +471,7 @@ namespace NinjaTrader.Gui.NinjaScript
 
                     // Load manifest
                     var analyzeManifest = new ExportManifest(csvDir);
+                    analyzeManifest.ParquetRootDir = tbParquetRootDir.Text;
                     logout(string.Format("Loaded manifest with {0} entries from: {1}",
                         analyzeManifest.EntryCount, ExportManifest.GetManifestPath()));
 
@@ -812,12 +895,18 @@ namespace NinjaTrader.Gui.NinjaScript
             string nrdDir = Path.Combine(Globals.UserDataDir, "db", "replay");
             string csvDir = tbCsvRootDir.Text;
             bool forceExport = cbForceExport.IsChecked == true;
+            bool parquetPipelineEnabled = cbEnableParquetPipeline.IsChecked == true;
+            string parquetRootDir = tbParquetRootDir.Text;
+            string parquetBridgeCommand = tbParquetBridgeCommand.Text;
+            string parquetBridgeWorkingDir = tbParquetBridgeWorkingDir.Text;
+            bool deleteTempCsvOnSuccess = cbDeleteTempCsv.IsChecked == true;
 
             // Get selected paths from ListBox
             List<string> selectedPaths = lbSelectedPaths.Items.Cast<string>().ToList();
 
             // Initialize manifest
             manifest = new ExportManifest(csvDir);
+            manifest.ParquetRootDir = tbParquetRootDir.Text;
             logout(string.Format("Loaded manifest with {0} entries", manifest.EntryCount));
 
             if (!Directory.Exists(csvDir))
@@ -831,6 +920,40 @@ namespace NinjaTrader.Gui.NinjaScript
                     logout(string.Format("ERROR: Unable to create the CSV root directory \"{0}\": {1}", csvDir, error.ToString()));
                     return;
                 }
+            }
+
+            if (parquetPipelineEnabled)
+            {
+                if (string.IsNullOrWhiteSpace(parquetRootDir))
+                {
+                    logout("ERROR: Parquet destination root directory is required when pipeline is enabled");
+                    return;
+                }
+
+                if (string.IsNullOrWhiteSpace(parquetBridgeCommand))
+                {
+                    logout("ERROR: Bridge command is required when pipeline is enabled");
+                    return;
+                }
+
+                if (!string.IsNullOrWhiteSpace(parquetBridgeWorkingDir) && !Directory.Exists(parquetBridgeWorkingDir))
+                {
+                    logout(string.Format("ERROR: Bridge working directory not found: {0}", parquetBridgeWorkingDir));
+                    return;
+                }
+
+                try
+                {
+                    if (!Directory.Exists(parquetRootDir))
+                        Directory.CreateDirectory(parquetRootDir);
+                }
+                catch (Exception error)
+                {
+                    logout(string.Format("ERROR: Unable to create Parquet root directory \"{0}\": {1}", parquetRootDir, error.Message));
+                    return;
+                }
+
+                logout(string.Format("Parquet pipeline enabled -> {0}", parquetRootDir));
             }
 
             // Create new cancellation token
@@ -870,7 +993,8 @@ namespace NinjaTrader.Gui.NinjaScript
                         for (int i = 0; i < nrdSubDirs.Length; i++)
                         {
                             if (token.IsCancellationRequested) break;
-                            ProceedDirectory(entries, nrdDir, nrdSubDirs[i], csvDir, forceExport);
+                            ProceedDirectory(entries, nrdDir, nrdSubDirs[i], csvDir, forceExport,
+                                parquetPipelineEnabled, parquetRootDir, parquetBridgeCommand, parquetBridgeWorkingDir, deleteTempCsvOnSuccess);
                             updateScanProgress(i + 1, nrdSubDirs.Length);
                         }
                     }
@@ -885,7 +1009,8 @@ namespace NinjaTrader.Gui.NinjaScript
                             if (File.Exists(path) && path.EndsWith(".nrd", StringComparison.OrdinalIgnoreCase))
                             {
                                 // Single file
-                                ProceedFile(entries, path, csvDir, forceExport);
+                                ProceedFile(entries, path, csvDir, forceExport,
+                                    parquetPipelineEnabled, parquetRootDir, parquetBridgeCommand, parquetBridgeWorkingDir, deleteTempCsvOnSuccess);
                             }
                             else if (Directory.Exists(path))
                             {
@@ -894,7 +1019,8 @@ namespace NinjaTrader.Gui.NinjaScript
                                 if (nrdFiles.Length > 0)
                                 {
                                     // Folder contains .nrd files directly
-                                    ProceedDirectory(entries, Path.GetDirectoryName(path), path, csvDir, forceExport);
+                                    ProceedDirectory(entries, Path.GetDirectoryName(path), path, csvDir, forceExport,
+                                        parquetPipelineEnabled, parquetRootDir, parquetBridgeCommand, parquetBridgeWorkingDir, deleteTempCsvOnSuccess);
                                 }
                                 else
                                 {
@@ -903,7 +1029,8 @@ namespace NinjaTrader.Gui.NinjaScript
                                     foreach (string subDir in subDirs)
                                     {
                                         if (token.IsCancellationRequested) break;
-                                        ProceedDirectory(entries, path, subDir, csvDir, forceExport);
+                                        ProceedDirectory(entries, path, subDir, csvDir, forceExport,
+                                            parquetPipelineEnabled, parquetRootDir, parquetBridgeCommand, parquetBridgeWorkingDir, deleteTempCsvOnSuccess);
                                     }
                                 }
                             }
@@ -939,7 +1066,17 @@ namespace NinjaTrader.Gui.NinjaScript
             }, token);
         }
 
-        private void ProceedDirectory(List<DumpEntry> entries, string nrdRoot, string nrdDir, string csvDir, bool forceExport)
+        private void ProceedDirectory(
+            List<DumpEntry> entries,
+            string nrdRoot,
+            string nrdDir,
+            string csvDir,
+            bool forceExport,
+            bool parquetPipelineEnabled,
+            string parquetRootDir,
+            string parquetBridgeCommand,
+            string parquetBridgeWorkingDir,
+            bool deleteTempCsvOnSuccess)
         {
             string[] fileEntries = Directory.GetFiles(nrdDir, "*.nrd");
             if (fileEntries.Length == 0)
@@ -950,11 +1087,21 @@ namespace NinjaTrader.Gui.NinjaScript
 
             foreach (string fileName in fileEntries)
             {
-                ProceedFile(entries, fileName, csvDir, forceExport);
+                ProceedFile(entries, fileName, csvDir, forceExport,
+                    parquetPipelineEnabled, parquetRootDir, parquetBridgeCommand, parquetBridgeWorkingDir, deleteTempCsvOnSuccess);
             }
         }
 
-        private void ProceedFile(List<DumpEntry> entries, string fileName, string csvDir, bool forceExport)
+        private void ProceedFile(
+            List<DumpEntry> entries,
+            string fileName,
+            string csvDir,
+            bool forceExport,
+            bool parquetPipelineEnabled,
+            string parquetRootDir,
+            string parquetBridgeCommand,
+            string parquetBridgeWorkingDir,
+            bool deleteTempCsvOnSuccess)
         {
             string fullName = Path.GetFileName(Path.GetDirectoryName(fileName));
             string displayName = Path.GetFileName(fileName);
@@ -972,7 +1119,12 @@ namespace NinjaTrader.Gui.NinjaScript
             }
             Cbi.Instrument instrument = instruments[0];
             string name = Path.GetFileNameWithoutExtension(fileName);
+            string relativeCsvPath = Path.Combine(instrument.FullName, name + ".csv");
             string csvFileName = string.Format("{0}.csv", Path.Combine(csvDir, instrument.FullName, name));
+            if (parquetPipelineEnabled)
+            {
+                csvFileName = string.Format("{0}.csv", Path.Combine(csvDir, "__temp_csv", instrument.FullName, name));
+            }
 
             // Get NRD file info
             FileInfo nrdInfo = new FileInfo(fileName);
@@ -990,7 +1142,11 @@ namespace NinjaTrader.Gui.NinjaScript
                     return;
 
                 case ExportManifest.ExportDecision.AppendMode:
-                    if (!File.Exists(csvFileName))
+                    if (parquetPipelineEnabled)
+                    {
+                        logout(string.Format("Will re-export: {0} (pipeline mode)", displayName));
+                    }
+                    else if (!File.Exists(csvFileName))
                     {
                         // Manifest says append but CSV doesn't exist - do full export
                         logout(string.Format("Will export: {0} (CSV missing)", displayName));
@@ -1025,6 +1181,12 @@ namespace NinjaTrader.Gui.NinjaScript
                 AppendMode = appendMode,
                 ForceExport = forceExport,
                 NrdFilePath = fileName,
+                UseParquetPipeline = parquetPipelineEnabled,
+                ParquetRootDir = parquetRootDir,
+                ParquetBridgeCommand = parquetBridgeCommand,
+                ParquetBridgeWorkingDir = parquetBridgeWorkingDir,
+                DeleteTempCsvOnSuccess = deleteTempCsvOnSuccess,
+                RelativeCsvPath = relativeCsvPath.Replace("\\", "/"),
             });
         }
 
@@ -1168,7 +1330,44 @@ namespace NinjaTrader.Gui.NinjaScript
 
             try
             {
-                if (entry.AppendMode && !entry.ForceExport)
+                if (entry.UseParquetPipeline)
+                {
+                    logout(string.Format("Converting \"{0}\" to Parquet...", entry.FromName));
+
+                    if (entry.ForceExport && File.Exists(entry.CsvFileName))
+                        File.Delete(entry.CsvFileName);
+
+                    MarketReplay.DumpMarketDepth(entry.Instrument, entry.Date, entry.Date, entry.CsvFileName);
+
+                    string bridgeError;
+                    bool parquetSuccess = ConvertTempCsvToParquet(entry, token, out bridgeError);
+                    if (!parquetSuccess)
+                    {
+                        UpdateManifestEntry(entry, "partial");
+                        logout(string.Format("ERROR: Parquet conversion failed for \"{0}\": {1}", entry.FromName, bridgeError));
+                        return;
+                    }
+
+                    if (entry.DeleteTempCsvOnSuccess)
+                    {
+                        try
+                        {
+                            if (File.Exists(entry.CsvFileName))
+                                File.Delete(entry.CsvFileName);
+                        }
+                        catch (Exception ex)
+                        {
+                            logout(string.Format("WARNING: Unable to delete temp CSV \"{0}\": {1}", entry.CsvFileName, ex.Message));
+                        }
+                    }
+
+                    if (!token.IsCancellationRequested)
+                    {
+                        UpdateManifestEntry(entry, "complete");
+                        logout(string.Format("Converted to Parquet \"{0}\"", entry.FromName));
+                    }
+                }
+                else if (entry.AppendMode && !entry.ForceExport)
                 {
                     logout(string.Format("Updating \"{0}\"...", entry.FromName));
                     AppendNewRecords(entry, token);
@@ -1241,6 +1440,113 @@ namespace NinjaTrader.Gui.NinjaScript
             {
                 logout(string.Format("WARNING: Failed to update manifest: {0}", ex.Message));
             }
+        }
+
+        private bool ConvertTempCsvToParquet(DumpEntry entry, CancellationToken token, out string error)
+        {
+            error = "";
+            if (token.IsCancellationRequested)
+            {
+                error = "Canceled";
+                return false;
+            }
+
+            try
+            {
+                string bridgeExe;
+                string bridgeArgs;
+                if (!SplitCommand(entry.ParquetBridgeCommand, out bridgeExe, out bridgeArgs))
+                {
+                    error = "Invalid bridge command";
+                    return false;
+                }
+
+                string callArgs = string.Format(
+                    "{0} --source-file \"{1}\" --relative-path \"{2}\" --dest \"{3}\"",
+                    bridgeArgs,
+                    entry.CsvFileName,
+                    entry.RelativeCsvPath,
+                    entry.ParquetRootDir).Trim();
+
+                var processStart = new ProcessStartInfo
+                {
+                    FileName = bridgeExe,
+                    Arguments = callArgs,
+                    WorkingDirectory = string.IsNullOrWhiteSpace(entry.ParquetBridgeWorkingDir)
+                        ? Directory.GetCurrentDirectory()
+                        : entry.ParquetBridgeWorkingDir,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                };
+
+                using (var process = Process.Start(processStart))
+                {
+                    if (process == null)
+                    {
+                        error = "Failed to start parquet bridge process";
+                        return false;
+                    }
+
+                    string stdOut = process.StandardOutput.ReadToEnd();
+                    string stdErr = process.StandardError.ReadToEnd();
+                    process.WaitForExit();
+
+                    if (token.IsCancellationRequested)
+                    {
+                        error = "Canceled";
+                        return false;
+                    }
+
+                    if (process.ExitCode != 0)
+                    {
+                        error = !string.IsNullOrWhiteSpace(stdErr) ? stdErr.Trim() :
+                            (!string.IsNullOrWhiteSpace(stdOut) ? stdOut.Trim() : string.Format("Exit code {0}", process.ExitCode));
+                        return false;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(stdOut))
+                        logout(string.Format("Parquet bridge output: {0}", stdOut.Trim()));
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+        }
+
+        private static bool SplitCommand(string command, out string exe, out string args)
+        {
+            exe = "";
+            args = "";
+
+            if (string.IsNullOrWhiteSpace(command))
+                return false;
+
+            string trimmed = command.Trim();
+            if (trimmed.StartsWith("\""))
+            {
+                int end = trimmed.IndexOf('"', 1);
+                if (end <= 1) return false;
+                exe = trimmed.Substring(1, end - 1);
+                args = trimmed.Substring(end + 1).Trim();
+                return true;
+            }
+
+            int firstSpace = trimmed.IndexOf(' ');
+            if (firstSpace < 0)
+            {
+                exe = trimmed;
+                return true;
+            }
+
+            exe = trimmed.Substring(0, firstSpace);
+            args = trimmed.Substring(firstSpace + 1).Trim();
+            return true;
         }
 
         private void AppendNewRecords(DumpEntry entry, CancellationToken token)
@@ -1461,6 +1767,34 @@ namespace NinjaTrader.Gui.NinjaScript
                                 lbSelectedPaths.Items.Add(pathEl.Value);
                         }
                     }
+
+                    XElement elParquetRootDir = elRoot.Element("ParquetRootDir");
+                    if (elParquetRootDir != null)
+                        tbParquetRootDir.Text = elParquetRootDir.Value;
+
+                    XElement elParquetBridgeCommand = elRoot.Element("ParquetBridgeCommand");
+                    if (elParquetBridgeCommand != null)
+                        tbParquetBridgeCommand.Text = elParquetBridgeCommand.Value;
+
+                    XElement elParquetBridgeWorkingDir = elRoot.Element("ParquetBridgeWorkingDir");
+                    if (elParquetBridgeWorkingDir != null)
+                        tbParquetBridgeWorkingDir.Text = elParquetBridgeWorkingDir.Value;
+
+                    XElement elEnableParquetPipeline = elRoot.Element("EnableParquetPipeline");
+                    if (elEnableParquetPipeline != null)
+                    {
+                        bool enabled;
+                        if (bool.TryParse(elEnableParquetPipeline.Value, out enabled))
+                            cbEnableParquetPipeline.IsChecked = enabled;
+                    }
+
+                    XElement elDeleteTempCsv = elRoot.Element("DeleteTempCsvOnSuccess");
+                    if (elDeleteTempCsv != null)
+                    {
+                        bool deleteTemp;
+                        if (bool.TryParse(elDeleteTempCsv.Value, out deleteTemp))
+                            cbDeleteTempCsv.IsChecked = deleteTemp;
+                    }
                 }
             }
         }
@@ -1475,8 +1809,18 @@ namespace NinjaTrader.Gui.NinjaScript
             {
                 elSelectedPaths.Add(new XElement("Path", path));
             }
+            XElement elParquetRootDir = new XElement("ParquetRootDir", tbParquetRootDir.Text);
+            XElement elParquetBridgeCommand = new XElement("ParquetBridgeCommand", tbParquetBridgeCommand.Text);
+            XElement elParquetBridgeWorkingDir = new XElement("ParquetBridgeWorkingDir", tbParquetBridgeWorkingDir.Text);
+            XElement elEnableParquetPipeline = new XElement("EnableParquetPipeline", cbEnableParquetPipeline.IsChecked == true);
+            XElement elDeleteTempCsv = new XElement("DeleteTempCsvOnSuccess", cbDeleteTempCsv.IsChecked == true);
             elRoot.Add(elCsvRootDir);
             elRoot.Add(elSelectedPaths);
+            elRoot.Add(elParquetRootDir);
+            elRoot.Add(elParquetBridgeCommand);
+            elRoot.Add(elParquetBridgeWorkingDir);
+            elRoot.Add(elEnableParquetPipeline);
+            elRoot.Add(elDeleteTempCsv);
             element.Add(elRoot);
         }
 
@@ -1505,6 +1849,11 @@ namespace NinjaTrader.Gui.NinjaScript
                 bRemove.IsEnabled = false;
                 bClear.IsEnabled = false;
                 cbForceExport.IsEnabled = false;
+                cbEnableParquetPipeline.IsEnabled = false;
+                cbDeleteTempCsv.IsEnabled = false;
+                tbParquetRootDir.IsReadOnly = true;
+                tbParquetBridgeCommand.IsReadOnly = true;
+                tbParquetBridgeWorkingDir.IsReadOnly = true;
                 double margin = (double)FindResource("MarginBase");
                 lProgress.Margin = new Thickness(margin, 0, margin, 0);
                 lProgress.Height = 24;
@@ -1542,6 +1891,11 @@ namespace NinjaTrader.Gui.NinjaScript
                     bRemove.IsEnabled = true;
                     bClear.IsEnabled = true;
                     cbForceExport.IsEnabled = true;
+                    cbEnableParquetPipeline.IsEnabled = true;
+                    cbDeleteTempCsv.IsEnabled = true;
+                    tbParquetRootDir.IsReadOnly = false;
+                    tbParquetBridgeCommand.IsReadOnly = false;
+                    tbParquetBridgeWorkingDir.IsReadOnly = false;
                     bAnalyze.IsEnabled = true;
                     bConvert.IsEnabled = true;
                     bConvert.Content = "_Convert";
@@ -1564,6 +1918,11 @@ namespace NinjaTrader.Gui.NinjaScript
                 bRemove.IsEnabled = false;
                 bClear.IsEnabled = false;
                 cbForceExport.IsEnabled = false;
+                cbEnableParquetPipeline.IsEnabled = false;
+                cbDeleteTempCsv.IsEnabled = false;
+                tbParquetRootDir.IsReadOnly = true;
+                tbParquetBridgeCommand.IsReadOnly = true;
+                tbParquetBridgeWorkingDir.IsReadOnly = true;
                 double margin = (double)FindResource("MarginBase");
                 lProgress.Margin = new Thickness(margin, 0, margin, 0);
                 lProgress.Height = 24;
@@ -1593,6 +1952,11 @@ namespace NinjaTrader.Gui.NinjaScript
                 bRemove.IsEnabled = true;
                 bClear.IsEnabled = true;
                 cbForceExport.IsEnabled = true;
+                cbEnableParquetPipeline.IsEnabled = true;
+                cbDeleteTempCsv.IsEnabled = true;
+                tbParquetRootDir.IsReadOnly = false;
+                tbParquetBridgeCommand.IsReadOnly = false;
+                tbParquetBridgeWorkingDir.IsReadOnly = false;
                 bAnalyze.IsEnabled = true;
                 bConvert.IsEnabled = true;
                 bConvert.Content = "_Close";
@@ -1821,6 +2185,12 @@ namespace NinjaTrader.Gui.NinjaScript
         public bool AppendMode { get; set; }
         public bool ForceExport { get; set; }
         public string NrdFilePath { get; set; }
+        public bool UseParquetPipeline { get; set; }
+        public string ParquetRootDir { get; set; }
+        public string ParquetBridgeCommand { get; set; }
+        public string ParquetBridgeWorkingDir { get; set; }
+        public bool DeleteTempCsvOnSuccess { get; set; }
+        public string RelativeCsvPath { get; set; }
     }
 
     public class ManifestEntry
@@ -1876,6 +2246,7 @@ namespace NinjaTrader.Gui.NinjaScript
         private readonly object lockObj = new object();
 
         public string CsvRootDir { get; set; }
+        public string ParquetRootDir { get; set; }
 
         public int EntryCount => entries.Count;
 
@@ -1916,6 +2287,11 @@ namespace NinjaTrader.Gui.NinjaScript
                             CsvRootDir = line.Substring(9).Trim();
                             continue;
                         }
+                        if (line.StartsWith("#PARQUETROOT:"))
+                        {
+                            ParquetRootDir = line.Substring(13).Trim();
+                            continue;
+                        }
 
                         if (line.StartsWith("#")) continue;
 
@@ -1943,6 +2319,8 @@ namespace NinjaTrader.Gui.NinjaScript
                         writer.WriteLine("# NRDToCSV Export Manifest - DO NOT EDIT");
                         if (!string.IsNullOrEmpty(CsvRootDir))
                             writer.WriteLine("#CSVROOT:" + CsvRootDir);
+                        if (!string.IsNullOrEmpty(ParquetRootDir))
+                            writer.WriteLine("#PARQUETROOT:" + ParquetRootDir);
                         writer.WriteLine("# Instrument\tDate\tStatus\tNrdSize\tNrdModified\tCsvRecords\tLastTimestamp\tLastOffset\tExportedAt");
                         foreach (var entry in entries.Values.OrderBy(e => e.Key))
                         {

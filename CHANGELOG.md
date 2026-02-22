@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-02-22
+### Added
+- Optional Parquet pipeline mode (`NRD -> temp CSV -> Parquet`) in the NinjaTrader AddOn UI
+- Bridge command integration for `csv-to-parquet-bridge` execution from conversion flow
+- Parquet bridge working-directory setting for reliable `uv` project resolution
+- Workspace persistence for Parquet pipeline settings
+
+### Changed
+- Pipeline execution now launches the bridge process directly (without `cmd /c`) for safer argument handling
+- Conversion flow supports per-file Parquet handoff with optional temp CSV cleanup
+- Manifest settings now persist both CSV root and Parquet root directories
+
 ## [1.3.0] - 2026-02-22
 ### Added
 - Analyze mode to verify CSV completeness against NRD source data
@@ -48,7 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ability to specify output `*.csv` root directory
 - Filter of `*.nrd` file names to convert based on RedExp
 
-[Unreleased]: https://github.com/eugeneilyin/nrdtocsv/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/eugeneilyin/nrdtocsv/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/eugeneilyin/nrdtocsv/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/eugeneilyin/nrdtocsv/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/eugeneilyin/nrdtocsv/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/eugeneilyin/nrdtocsv/compare/v1.0.0...v1.1.0
