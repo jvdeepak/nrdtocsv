@@ -491,12 +491,16 @@ namespace NinjaTrader.Gui.NinjaScript
                 return;
             }
 
+            bool parquetPipelineEnabled = cbEnableParquetPipeline.IsChecked == true;
             string csvDir = tbCsvRootDir.Text;
+            string parquetDir = tbParquetRootDir.Text;
             string nrdDir = Path.Combine(Globals.UserDataDir, "db", "replay");
+            string analysisRootDir = parquetPipelineEnabled ? parquetDir : csvDir;
 
-            if (!Directory.Exists(csvDir))
+            if (!Directory.Exists(analysisRootDir))
             {
-                logout(string.Format("CSV directory does not exist: {0}", csvDir));
+                logout(string.Format("{0} directory does not exist: {1}",
+                    parquetPipelineEnabled ? "Parquet" : "CSV", analysisRootDir));
                 return;
             }
 
@@ -526,6 +530,23 @@ namespace NinjaTrader.Gui.NinjaScript
             {
                 try
                 {
+                    if (parquetPipelineEnabled)
+                    {
+                        AnalyzeParquetDestination(
+                            parquetDir,
+                            nrdDir,
+                            selectedPaths,
+                            token,
+                            parquetRootForManifest,
+                            bridgeCommandForManifest,
+                            bridgeWorkDirForManifest,
+                            forceExportForManifest,
+                            enableParquetForManifest,
+                            deleteTempForManifest,
+                            parallelThreadsForManifest);
+                        return;
+                    }
+
                     var analysisStartTime = DateTime.Now;
 
                     // Load manifest
@@ -1139,6 +1160,246 @@ namespace NinjaTrader.Gui.NinjaScript
                     Dispatcher.Invoke(() => complete());
                 }
             }, token);
+        }
+
+        private void AnalyzeParquetDestination(
+            string parquetDir,
+            string nrdDir,
+            List<string> selectedPaths,
+            CancellationToken token,
+            string parquetRootForManifest,
+            string bridgeCommandForManifest,
+            string bridgeWorkDirForManifest,
+            bool forceExportForManifest,
+            bool enableParquetForManifest,
+            bool deleteTempForManifest,
+            int parallelThreadsForManifest)
+        {
+            var analysisStartTime = DateTime.Now;
+
+            var analyzeManifest = new ExportManifest(parquetDir);
+            analyzeManifest.ParquetRootDir = parquetRootForManifest;
+            analyzeManifest.ParquetBridgeCommand = bridgeCommandForManifest;
+            analyzeManifest.ParquetBridgeWorkingDir = bridgeWorkDirForManifest;
+            analyzeManifest.ForceExport = forceExportForManifest;
+            analyzeManifest.EnableParquetPipeline = enableParquetForManifest;
+            analyzeManifest.DeleteTempCsvOnSuccess = deleteTempForManifest;
+            analyzeManifest.ParallelThreads = parallelThreadsForManifest;
+            analyzeManifest.SelectedPaths = selectedPaths;
+            logout(string.Format("Loaded manifest with {0} entries from: {1}",
+                analyzeManifest.EntryCount, ExportManifest.GetManifestPath()));
+
+            // Build NRD index first (instrument/date -> nrd file path)
+            var nrdFileMap = new Dictionary<string, string>();
+            logout("Building NRD file index...");
+
+            if (selectedPaths.Count == 0)
+            {
+                if (Directory.Exists(nrdDir))
+                {
+                    foreach (string nrdInstrumentDir in Directory.GetDirectories(nrdDir))
+                    {
+                        if (token.IsCancellationRequested) break;
+                        IndexNrdDirectory(nrdFileMap, nrdInstrumentDir, token);
+                    }
+                }
+            }
+            else
+            {
+                foreach (string path in selectedPaths)
+                {
+                    if (token.IsCancellationRequested) break;
+
+                    if (File.Exists(path) && path.EndsWith(".nrd", StringComparison.OrdinalIgnoreCase))
+                    {
+                        IndexNrdFile(nrdFileMap, path);
+                    }
+                    else if (Directory.Exists(path))
+                    {
+                        string[] nrdFiles = Directory.GetFiles(path, "*.nrd");
+                        if (nrdFiles.Length > 0)
+                        {
+                            IndexNrdDirectory(nrdFileMap, path, token);
+                        }
+                        else
+                        {
+                            foreach (string subDir in Directory.GetDirectories(path))
+                            {
+                                if (token.IsCancellationRequested) break;
+                                IndexNrdDirectory(nrdFileMap, subDir, token);
+                            }
+                        }
+                    }
+                }
+            }
+
+            logout(string.Format("Found {0} NRD files", nrdFileMap.Count));
+            if (nrdFileMap.Count == 0)
+            {
+                logout("No NRD files found to analyze");
+                return;
+            }
+
+            // Progress setup
+            int total = nrdFileMap.Count;
+            int processed = 0;
+            Dispatcher.Invoke(() =>
+            {
+                double margin = (double)FindResource("MarginBase");
+                lProgress.Margin = new Thickness(margin, 0, margin, 0);
+                lProgress.Height = 24;
+                lProgress.Content = "Analyzing parquet outputs...";
+                pbProgress.Margin = new Thickness(margin);
+                pbProgress.Height = 16;
+                pbProgress.IsIndeterminate = false;
+                pbProgress.Minimum = 0;
+                pbProgress.Maximum = total;
+                pbProgress.Value = 0;
+            });
+
+            int complete = 0, partial = 0, outdated = 0, missing = 0, orphaned = 0;
+            int updated = 0, cached = 0;
+            var nrdKeys = new HashSet<string>(nrdFileMap.Keys);
+
+            foreach (var kvp in nrdFileMap)
+            {
+                if (token.IsCancellationRequested) break;
+
+                string key = kvp.Key;
+                string[] parts = key.Split('/');
+                if (parts.Length != 2) continue;
+
+                string instrumentName = parts[0];
+                string dateName = parts[1];
+                string nrdFile = kvp.Value;
+                FileInfo nrdInfo = new FileInfo(nrdFile);
+
+                string l1Path = Path.Combine(parquetDir, instrumentName, dateName + "_L1.parquet");
+                string l2Path = Path.Combine(parquetDir, instrumentName, dateName + "_L2.parquet");
+
+                bool hasL1 = File.Exists(l1Path);
+                bool hasL2 = File.Exists(l2Path);
+                bool hasAnyParquet = hasL1 || hasL2;
+
+                var existingEntry = analyzeManifest.Get(instrumentName, dateName);
+                bool nrdUnchanged = existingEntry != null
+                    && existingEntry.NrdSize == nrdInfo.Length
+                    && Math.Abs((existingEntry.NrdModified - nrdInfo.LastWriteTime).TotalSeconds) <= 1;
+
+                string status;
+                if (!hasAnyParquet)
+                {
+                    missing++;
+                    status = "partial";
+                    logout(string.Format("Missing parquet: {0}/{1}", instrumentName, dateName));
+                }
+                else if (nrdUnchanged && existingEntry != null && existingEntry.Status == "complete")
+                {
+                    complete++;
+                    cached++;
+                    status = "complete";
+                }
+                else if (nrdUnchanged && existingEntry != null && existingEntry.Status == "partial")
+                {
+                    partial++;
+                    cached++;
+                    status = "partial";
+                }
+                else if (!nrdUnchanged && hasAnyParquet)
+                {
+                    outdated++;
+                    status = "partial";
+                    logout(string.Format("Outdated parquet: {0}/{1} (NRD changed)", instrumentName, dateName));
+                }
+                else
+                {
+                    complete++;
+                    status = "complete";
+                }
+
+                long csvRecords = existingEntry != null ? existingEntry.CsvRecords : 0;
+                string lastTimestamp = existingEntry != null ? existingEntry.LastTimestamp : "";
+                string lastOffset = existingEntry != null ? existingEntry.LastOffset : "";
+
+                var newEntry = new ManifestEntry
+                {
+                    Instrument = instrumentName,
+                    Date = dateName,
+                    Status = status,
+                    NrdSize = nrdInfo.Length,
+                    NrdModified = nrdInfo.LastWriteTime,
+                    CsvRecords = csvRecords,
+                    LastTimestamp = lastTimestamp,
+                    LastOffset = lastOffset,
+                    ExportedAt = existingEntry?.ExportedAt ?? DateTime.Now
+                };
+
+                if (existingEntry == null ||
+                    existingEntry.Status != newEntry.Status ||
+                    existingEntry.NrdSize != newEntry.NrdSize ||
+                    Math.Abs((existingEntry.NrdModified - newEntry.NrdModified).TotalSeconds) > 1)
+                {
+                    updated++;
+                }
+
+                analyzeManifest.Update(newEntry);
+
+                processed++;
+                int progressValue = processed;
+                Dispatcher.InvokeAsync(() =>
+                {
+                    pbProgress.Value = progressValue;
+                    lProgress.Content = string.Format("Analyzed {0} of {1} files...", progressValue, total);
+                });
+            }
+
+            // Orphaned parquet: parquet files with no matching NRD key
+            if (!token.IsCancellationRequested && Directory.Exists(parquetDir))
+            {
+                var orphanedKeys = new HashSet<string>();
+                foreach (string instrumentDir in Directory.GetDirectories(parquetDir))
+                {
+                    string instrumentName = Path.GetFileName(instrumentDir);
+                    foreach (string parquetFile in Directory.GetFiles(instrumentDir, "*_L*.parquet"))
+                    {
+                        string fileName = Path.GetFileNameWithoutExtension(parquetFile);
+                        string datePart = fileName.EndsWith("_L1") || fileName.EndsWith("_L2")
+                            ? fileName.Substring(0, fileName.Length - 3)
+                            : fileName;
+                        string k = instrumentName + "/" + datePart;
+                        if (!nrdKeys.Contains(k))
+                            orphanedKeys.Add(k);
+                    }
+                }
+                orphaned = orphanedKeys.Count;
+            }
+
+            analyzeManifest.Save();
+
+            Dispatcher.Invoke(() =>
+            {
+                lProgress.Margin = new Thickness(0);
+                lProgress.Height = 0;
+                pbProgress.Margin = new Thickness(0);
+                pbProgress.Height = 0;
+            });
+
+            if (!token.IsCancellationRequested)
+            {
+                var totalTime = (DateTime.Now - analysisStartTime).TotalSeconds;
+                logout("");
+                logout("=== Parquet Analysis Complete ===");
+                logout(string.Format("  Complete:  {0} files", complete));
+                logout(string.Format("  Partial:   {0} files", partial));
+                logout(string.Format("  Outdated:  {0} files", outdated));
+                logout(string.Format("  Missing:   {0} files (NRD exists, no Parquet)", missing));
+                logout(string.Format("  Orphaned:  {0} files (Parquet exists, no NRD)", orphaned));
+                logout("");
+                logout(string.Format("Performance: {0} cached, {1:F1}s total", cached, totalTime));
+                logout(string.Format("Manifest: {0} entries modified, {1} total entries",
+                    updated, analyzeManifest.EntryCount));
+                logout(string.Format("Manifest saved to: {0}", ExportManifest.GetManifestPath()));
+            }
         }
 
         private void RefreshParallelThreadsFromUi()
