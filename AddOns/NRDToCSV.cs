@@ -335,7 +335,7 @@ namespace NinjaTrader.Gui.NinjaScript
             cbEnableCpuThrottling = new CheckBox()
             {
                 Content = "Enable CPU throttling",
-                Margin = new Thickness(margin, 0, margin, margin / 2),
+                Margin = new Thickness(0, 0, margin / 2, 0),
                 VerticalAlignment = VerticalAlignment.Center,
                 IsChecked = true,
             };
@@ -344,14 +344,24 @@ namespace NinjaTrader.Gui.NinjaScript
             Label lMaxCpuPercent = new Label()
             {
                 Foreground = FindResource("FontLabelBrush") as Brush,
-                Margin = new Thickness(margin, 0, margin, 0),
-                Content = "Max CPU usage % (10-100):",
+                Margin = new Thickness(0, 0, margin / 2, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                Content = "Max %:",
             };
             tbMaxCpuPercent = new TextBox()
             {
-                Margin = new Thickness(margin, 0, margin, margin),
+                Margin = new Thickness(0, 0, 0, 0),
+                Width = 56,
                 Text = DEFAULT_MAX_CPU_PERCENT.ToString(),
             };
+            StackPanel cpuThrottlePanel = new StackPanel()
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(margin, 0, margin, margin),
+            };
+            cpuThrottlePanel.Children.Add(cbEnableCpuThrottling);
+            cpuThrottlePanel.Children.Add(lMaxCpuPercent);
+            cpuThrottlePanel.Children.Add(tbMaxCpuPercent);
 
             StackPanel actionPanel = new StackPanel()
             {
@@ -369,8 +379,10 @@ namespace NinjaTrader.Gui.NinjaScript
             tbOutput = new TextBox()
             {
                 IsReadOnly = true,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.NoWrap,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Visible,
                 Margin = new Thickness(margin),
             };
             pbProgress = new ProgressBar()
@@ -384,8 +396,6 @@ namespace NinjaTrader.Gui.NinjaScript
             };
 
             Grid grid = new Grid() { Background = new SolidColorBrush(Colors.Transparent) };
-            grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
@@ -423,13 +433,11 @@ namespace NinjaTrader.Gui.NinjaScript
             Grid.SetRow(cbDeleteTempCsv, 13);
             Grid.SetRow(lParallelThreads, 14);
             Grid.SetRow(tbParallelThreads, 15);
-            Grid.SetRow(cbEnableCpuThrottling, 16);
-            Grid.SetRow(lMaxCpuPercent, 17);
-            Grid.SetRow(tbMaxCpuPercent, 18);
-            Grid.SetRow(actionPanel, 19);
-            Grid.SetRow(tbOutput, 20);
-            Grid.SetRow(lProgress, 21);
-            Grid.SetRow(pbProgress, 22);
+            Grid.SetRow(cpuThrottlePanel, 16);
+            Grid.SetRow(tbOutput, 17);
+            Grid.SetRow(actionPanel, 18);
+            Grid.SetRow(lProgress, 19);
+            Grid.SetRow(pbProgress, 20);
             grid.Children.Add(lCsvRootDir);
             grid.Children.Add(tbCsvRootDir);
             grid.Children.Add(lSelectedPaths);
@@ -446,9 +454,7 @@ namespace NinjaTrader.Gui.NinjaScript
             grid.Children.Add(cbDeleteTempCsv);
             grid.Children.Add(lParallelThreads);
             grid.Children.Add(tbParallelThreads);
-            grid.Children.Add(cbEnableCpuThrottling);
-            grid.Children.Add(lMaxCpuPercent);
-            grid.Children.Add(tbMaxCpuPercent);
+            grid.Children.Add(cpuThrottlePanel);
             grid.Children.Add(actionPanel);
             grid.Children.Add(tbOutput);
             grid.Children.Add(lProgress);
