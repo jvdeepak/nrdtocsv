@@ -1,5 +1,6 @@
 #region Using declarations
 using System;
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Collections.Generic;
 using System.IO;
@@ -68,6 +69,9 @@ namespace NinjaTrader.Gui.NinjaScript
     public class NRDToCSVWindow : NTWindow, IWorkspacePersistence
     {
         private const int DEFAULT_PARALLEL_THREADS_COUNT = 4;
+        private const int DEFAULT_MAX_CPU_PERCENT = 70;
+        private const int MIN_MAX_CPU_PERCENT = 10;
+        private const int MAX_MAX_CPU_PERCENT = 100;
 
         private TextBox tbCsvRootDir;
         private ListBox lbSelectedPaths;
@@ -78,10 +82,12 @@ namespace NinjaTrader.Gui.NinjaScript
         private CheckBox cbForceExport;
         private CheckBox cbEnableParquetPipeline;
         private CheckBox cbDeleteTempCsv;
+        private CheckBox cbEnableCpuThrottling;
         private TextBox tbParquetRootDir;
         private TextBox tbParquetBridgeCommand;
         private TextBox tbParquetBridgeWorkingDir;
         private TextBox tbParallelThreads;
+        private TextBox tbMaxCpuPercent;
         private Button bAnalyze;
         private Button bConvert;
         private TextBox tbOutput;
@@ -95,8 +101,14 @@ namespace NinjaTrader.Gui.NinjaScript
         private bool scanning = false;
         private CancellationTokenSource cts;
         private readonly object progressLock = new object();
+        private readonly object cpuSampleLock = new object();
         private ExportManifest manifest;
         private int parallelThreadsCount = DEFAULT_PARALLEL_THREADS_COUNT;
+        private int maxCpuPercent = DEFAULT_MAX_CPU_PERCENT;
+        private bool enableCpuThrottling = true;
+        private DateTime cpuSampleWallClockUtc = DateTime.MinValue;
+        private TimeSpan cpuSampleProcessCpu = TimeSpan.Zero;
+        private double cachedProcessCpuPercent = 0;
 
         public NRDToCSVWindow()
         {
@@ -135,10 +147,22 @@ namespace NinjaTrader.Gui.NinjaScript
                         cbEnableParquetPipeline.IsChecked = savedManifest.EnableParquetPipeline.Value;
                     if (savedManifest.DeleteTempCsvOnSuccess.HasValue)
                         cbDeleteTempCsv.IsChecked = savedManifest.DeleteTempCsvOnSuccess.Value;
+                    if (savedManifest.EnableCpuThrottling.HasValue)
+                    {
+                        enableCpuThrottling = savedManifest.EnableCpuThrottling.Value;
+                        cbEnableCpuThrottling.IsChecked = enableCpuThrottling;
+                    }
                     if (savedManifest.ParallelThreads.HasValue && savedManifest.ParallelThreads.Value > 0)
                     {
                         parallelThreadsCount = savedManifest.ParallelThreads.Value;
                         tbParallelThreads.Text = parallelThreadsCount.ToString();
+                    }
+                    if (savedManifest.MaxCpuPercent.HasValue &&
+                        savedManifest.MaxCpuPercent.Value >= MIN_MAX_CPU_PERCENT &&
+                        savedManifest.MaxCpuPercent.Value <= MAX_MAX_CPU_PERCENT)
+                    {
+                        maxCpuPercent = savedManifest.MaxCpuPercent.Value;
+                        tbMaxCpuPercent.Text = maxCpuPercent.ToString();
                     }
                     if (savedManifest.SelectedPaths.Count > 0)
                     {
@@ -150,6 +174,7 @@ namespace NinjaTrader.Gui.NinjaScript
                         }
                     }
 
+                    UpdateCpuThrottleUiState();
                     savedManifest.Save();
                 }
                 catch { /* ignore manifest load errors on startup */ }
@@ -165,6 +190,7 @@ namespace NinjaTrader.Gui.NinjaScript
                 try
                 {
                     RefreshParallelThreadsFromUi();
+                    RefreshMaxCpuPercentFromUi();
                     var manifestToSave = new ExportManifest();
                     manifestToSave.CsvRootDir = tbCsvRootDir.Text;
                     manifestToSave.ParquetRootDir = tbParquetRootDir.Text;
@@ -173,7 +199,9 @@ namespace NinjaTrader.Gui.NinjaScript
                     manifestToSave.ForceExport = cbForceExport.IsChecked == true;
                     manifestToSave.EnableParquetPipeline = cbEnableParquetPipeline.IsChecked == true;
                     manifestToSave.DeleteTempCsvOnSuccess = cbDeleteTempCsv.IsChecked == true;
+                    manifestToSave.EnableCpuThrottling = cbEnableCpuThrottling.IsChecked == true;
                     manifestToSave.ParallelThreads = parallelThreadsCount;
+                    manifestToSave.MaxCpuPercent = maxCpuPercent;
                     manifestToSave.SelectedPaths = lbSelectedPaths.Items.Cast<string>().ToList();
                     manifestToSave.Save();
                 }
@@ -301,8 +329,28 @@ namespace NinjaTrader.Gui.NinjaScript
             };
             tbParallelThreads = new TextBox()
             {
-                Margin = new Thickness(margin, 0, margin, margin),
+                Margin = new Thickness(margin, 0, margin, margin / 2),
                 Text = DEFAULT_PARALLEL_THREADS_COUNT.ToString(),
+            };
+            cbEnableCpuThrottling = new CheckBox()
+            {
+                Content = "Enable CPU throttling",
+                Margin = new Thickness(margin, 0, margin, margin / 2),
+                VerticalAlignment = VerticalAlignment.Center,
+                IsChecked = true,
+            };
+            cbEnableCpuThrottling.Checked += (o, e) => UpdateCpuThrottleUiState();
+            cbEnableCpuThrottling.Unchecked += (o, e) => UpdateCpuThrottleUiState();
+            Label lMaxCpuPercent = new Label()
+            {
+                Foreground = FindResource("FontLabelBrush") as Brush,
+                Margin = new Thickness(margin, 0, margin, 0),
+                Content = "Max CPU usage % (10-100):",
+            };
+            tbMaxCpuPercent = new TextBox()
+            {
+                Margin = new Thickness(margin, 0, margin, margin),
+                Text = DEFAULT_MAX_CPU_PERCENT.ToString(),
             };
 
             StackPanel actionPanel = new StackPanel()
@@ -353,7 +401,10 @@ namespace NinjaTrader.Gui.NinjaScript
             grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition() { Height = new GridLength(1, GridUnitType.Star) });
+            grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
             Grid.SetRow(lCsvRootDir, 0);
@@ -372,10 +423,13 @@ namespace NinjaTrader.Gui.NinjaScript
             Grid.SetRow(cbDeleteTempCsv, 13);
             Grid.SetRow(lParallelThreads, 14);
             Grid.SetRow(tbParallelThreads, 15);
-            Grid.SetRow(actionPanel, 16);
-            Grid.SetRow(tbOutput, 17);
-            Grid.SetRow(lProgress, 18);
-            Grid.SetRow(pbProgress, 19);
+            Grid.SetRow(cbEnableCpuThrottling, 16);
+            Grid.SetRow(lMaxCpuPercent, 17);
+            Grid.SetRow(tbMaxCpuPercent, 18);
+            Grid.SetRow(actionPanel, 19);
+            Grid.SetRow(tbOutput, 20);
+            Grid.SetRow(lProgress, 21);
+            Grid.SetRow(pbProgress, 22);
             grid.Children.Add(lCsvRootDir);
             grid.Children.Add(tbCsvRootDir);
             grid.Children.Add(lSelectedPaths);
@@ -392,6 +446,9 @@ namespace NinjaTrader.Gui.NinjaScript
             grid.Children.Add(cbDeleteTempCsv);
             grid.Children.Add(lParallelThreads);
             grid.Children.Add(tbParallelThreads);
+            grid.Children.Add(cbEnableCpuThrottling);
+            grid.Children.Add(lMaxCpuPercent);
+            grid.Children.Add(tbMaxCpuPercent);
             grid.Children.Add(actionPanel);
             grid.Children.Add(tbOutput);
             grid.Children.Add(lProgress);
@@ -507,13 +564,17 @@ namespace NinjaTrader.Gui.NinjaScript
             // Get selected paths from ListBox
             List<string> selectedPaths = lbSelectedPaths.Items.Cast<string>().ToList();
             RefreshParallelThreadsFromUi();
+            RefreshMaxCpuPercentFromUi();
+            enableCpuThrottling = cbEnableCpuThrottling.IsChecked == true;
             string parquetRootForManifest = tbParquetRootDir.Text;
             string bridgeCommandForManifest = tbParquetBridgeCommand.Text;
             string bridgeWorkDirForManifest = tbParquetBridgeWorkingDir.Text;
             bool forceExportForManifest = cbForceExport.IsChecked == true;
             bool enableParquetForManifest = cbEnableParquetPipeline.IsChecked == true;
             bool deleteTempForManifest = cbDeleteTempCsv.IsChecked == true;
+            bool enableCpuThrottlingForManifest = cbEnableCpuThrottling.IsChecked == true;
             int parallelThreadsForManifest = parallelThreadsCount;
+            int maxCpuPercentForManifest = maxCpuPercent;
 
             tbOutput.Clear();
             logout("Analyzing destination folder...");
@@ -543,7 +604,9 @@ namespace NinjaTrader.Gui.NinjaScript
                             forceExportForManifest,
                             enableParquetForManifest,
                             deleteTempForManifest,
-                            parallelThreadsForManifest);
+                            enableCpuThrottlingForManifest,
+                            parallelThreadsForManifest,
+                            maxCpuPercentForManifest);
                         return;
                     }
 
@@ -557,7 +620,9 @@ namespace NinjaTrader.Gui.NinjaScript
                     analyzeManifest.ForceExport = forceExportForManifest;
                     analyzeManifest.EnableParquetPipeline = enableParquetForManifest;
                     analyzeManifest.DeleteTempCsvOnSuccess = deleteTempForManifest;
+                    analyzeManifest.EnableCpuThrottling = enableCpuThrottlingForManifest;
                     analyzeManifest.ParallelThreads = parallelThreadsForManifest;
+                    analyzeManifest.MaxCpuPercent = maxCpuPercentForManifest;
                     analyzeManifest.SelectedPaths = selectedPaths;
                     logout(string.Format("Loaded manifest with {0} entries from: {1}",
                         analyzeManifest.EntryCount, ExportManifest.GetManifestPath()));
@@ -991,6 +1056,8 @@ namespace NinjaTrader.Gui.NinjaScript
             // Get selected paths from ListBox
             List<string> selectedPaths = lbSelectedPaths.Items.Cast<string>().ToList();
             RefreshParallelThreadsFromUi();
+            RefreshMaxCpuPercentFromUi();
+            enableCpuThrottling = cbEnableCpuThrottling.IsChecked == true;
 
             // Initialize manifest
             manifest = new ExportManifest(csvDir);
@@ -1000,7 +1067,9 @@ namespace NinjaTrader.Gui.NinjaScript
             manifest.ForceExport = cbForceExport.IsChecked == true;
             manifest.EnableParquetPipeline = cbEnableParquetPipeline.IsChecked == true;
             manifest.DeleteTempCsvOnSuccess = cbDeleteTempCsv.IsChecked == true;
+            manifest.EnableCpuThrottling = enableCpuThrottling;
             manifest.ParallelThreads = parallelThreadsCount;
+            manifest.MaxCpuPercent = maxCpuPercent;
             manifest.SelectedPaths = lbSelectedPaths.Items.Cast<string>().ToList();
             logout(string.Format("Loaded manifest with {0} entries", manifest.EntryCount));
 
@@ -1148,8 +1217,16 @@ namespace NinjaTrader.Gui.NinjaScript
                     }
                     else
                     {
-                        logout(string.Format("Converting {0} files ({1}) using {2} worker(s)...",
-                            entries.Count, ToBytes(totalFilesLength), Math.Max(1, parallelThreadsCount)));
+                        if (enableCpuThrottling)
+                        {
+                            logout(string.Format("Converting {0} files ({1}) using {2} worker(s), max CPU {3}%...",
+                                entries.Count, ToBytes(totalFilesLength), Math.Max(1, parallelThreadsCount), maxCpuPercent));
+                        }
+                        else
+                        {
+                            logout(string.Format("Converting {0} files ({1}) using {2} worker(s), CPU throttling disabled...",
+                                entries.Count, ToBytes(totalFilesLength), Math.Max(1, parallelThreadsCount)));
+                        }
                         Dispatcher.Invoke(() => run(entries.Count));
                         RunConversionAsync(entries, token);
                     }
@@ -1173,7 +1250,9 @@ namespace NinjaTrader.Gui.NinjaScript
             bool forceExportForManifest,
             bool enableParquetForManifest,
             bool deleteTempForManifest,
-            int parallelThreadsForManifest)
+            bool enableCpuThrottlingForManifest,
+            int parallelThreadsForManifest,
+            int maxCpuPercentForManifest)
         {
             var analysisStartTime = DateTime.Now;
 
@@ -1184,7 +1263,9 @@ namespace NinjaTrader.Gui.NinjaScript
             analyzeManifest.ForceExport = forceExportForManifest;
             analyzeManifest.EnableParquetPipeline = enableParquetForManifest;
             analyzeManifest.DeleteTempCsvOnSuccess = deleteTempForManifest;
+            analyzeManifest.EnableCpuThrottling = enableCpuThrottlingForManifest;
             analyzeManifest.ParallelThreads = parallelThreadsForManifest;
+            analyzeManifest.MaxCpuPercent = maxCpuPercentForManifest;
             analyzeManifest.SelectedPaths = selectedPaths;
             logout(string.Format("Loaded manifest with {0} entries from: {1}",
                 analyzeManifest.EntryCount, ExportManifest.GetManifestPath()));
@@ -1413,6 +1494,29 @@ namespace NinjaTrader.Gui.NinjaScript
             parallelThreadsCount = parsed;
         }
 
+        private void RefreshMaxCpuPercentFromUi()
+        {
+            int parsed;
+            if (!int.TryParse(tbMaxCpuPercent.Text, out parsed))
+            {
+                parsed = DEFAULT_MAX_CPU_PERCENT;
+            }
+
+            if (parsed < MIN_MAX_CPU_PERCENT)
+                parsed = MIN_MAX_CPU_PERCENT;
+            else if (parsed > MAX_MAX_CPU_PERCENT)
+                parsed = MAX_MAX_CPU_PERCENT;
+
+            maxCpuPercent = parsed;
+            tbMaxCpuPercent.Text = parsed.ToString();
+        }
+
+        private void UpdateCpuThrottleUiState()
+        {
+            bool enabled = cbEnableCpuThrottling.IsChecked == true;
+            tbMaxCpuPercent.IsEnabled = enabled;
+        }
+
         private void ProceedDirectory(
             List<DumpEntry> entries,
             string nrdRoot,
@@ -1572,53 +1676,61 @@ namespace NinjaTrader.Gui.NinjaScript
             int totalCount = entries.Count;
             completedFiles = 0;
             completeFilesLength = 0;
-
-            var options = new ParallelOptions
-            {
-                MaxDegreeOfParallelism = Math.Max(1, parallelThreadsCount),
-                CancellationToken = token
-            };
+            int workersCount = Math.Max(1, parallelThreadsCount);
+            var queue = new ConcurrentQueue<DumpEntry>(entries);
 
             try
             {
-                Parallel.ForEach(entries, options, (entry, state) =>
+                ResetCpuSampling();
+                var workers = new List<Task>(workersCount);
+                for (int i = 0; i < workersCount; i++)
                 {
-                    if (token.IsCancellationRequested)
+                    workers.Add(Task.Run(() =>
                     {
-                        state.Stop();
-                        return;
-                    }
-
-                    ConvertNrd(entry, token);
-
-                    // Thread-safe progress update
-                    lock (progressLock)
-                    {
-                        completedFiles++;
-                        completeFilesLength += entry.NrdLength;
-                        int currentCompleted = completedFiles;
-                        long currentBytes = completeFilesLength;
-
-                        Dispatcher.InvokeAsync(() =>
+                        while (!token.IsCancellationRequested)
                         {
-                            pbProgress.Value = currentCompleted;
-                            string eta = "";
-                            if (currentBytes > 0 && totalFilesLength > 0)
+                            DumpEntry entry;
+                            if (!queue.TryDequeue(out entry))
+                                break;
+
+                            WaitForCpuBudget(token);
+                            if (token.IsCancellationRequested)
+                                break;
+
+                            ConvertNrd(entry, token);
+
+                            // Thread-safe progress update
+                            lock (progressLock)
                             {
-                                double ratio = (double)totalFilesLength / currentBytes - 1;
-                                if (ratio > 0)
+                                completedFiles++;
+                                completeFilesLength += entry.NrdLength;
+                                int currentCompleted = completedFiles;
+                                long currentBytes = completeFilesLength;
+
+                                Dispatcher.InvokeAsync(() =>
                                 {
-                                    TimeSpan elapsed = DateTime.Now - startTimestamp;
-                                    TimeSpan remaining = TimeSpan.FromTicks((long)(elapsed.Ticks * ratio));
-                                    eta = string.Format(" ETA: {0:D2}:{1:D2}:{2:D2}",
-                                        (int)remaining.TotalHours, remaining.Minutes, remaining.Seconds);
-                                }
+                                    pbProgress.Value = currentCompleted;
+                                    string eta = "";
+                                    if (currentBytes > 0 && totalFilesLength > 0)
+                                    {
+                                        double ratio = (double)totalFilesLength / currentBytes - 1;
+                                        if (ratio > 0)
+                                        {
+                                            TimeSpan elapsed = DateTime.Now - startTimestamp;
+                                            TimeSpan remaining = TimeSpan.FromTicks((long)(elapsed.Ticks * ratio));
+                                            eta = string.Format(" ETA: {0:D2}:{1:D2}:{2:D2}",
+                                                (int)remaining.TotalHours, remaining.Minutes, remaining.Seconds);
+                                        }
+                                    }
+                                    lProgress.Content = string.Format("{0} of {1} files converted ({2} of {3}){4}",
+                                        currentCompleted, totalCount, ToBytes(currentBytes), ToBytes(totalFilesLength), eta);
+                                });
                             }
-                            lProgress.Content = string.Format("{0} of {1} files converted ({2} of {3}){4}",
-                                currentCompleted, totalCount, ToBytes(currentBytes), ToBytes(totalFilesLength), eta);
-                        });
-                    }
-                });
+                        }
+                    }, token));
+                }
+
+                Task.WaitAll(workers.ToArray());
 
                 if (token.IsCancellationRequested)
                 {
@@ -1651,6 +1763,58 @@ namespace NinjaTrader.Gui.NinjaScript
                 }
 
                 Dispatcher.Invoke(() => complete());
+            }
+        }
+
+        private void ResetCpuSampling()
+        {
+            lock (cpuSampleLock)
+            {
+                cpuSampleWallClockUtc = DateTime.UtcNow;
+                cpuSampleProcessCpu = Process.GetCurrentProcess().TotalProcessorTime;
+                cachedProcessCpuPercent = 0;
+            }
+        }
+
+        private void WaitForCpuBudget(CancellationToken token)
+        {
+            if (!enableCpuThrottling || maxCpuPercent >= MAX_MAX_CPU_PERCENT)
+                return;
+
+            while (!token.IsCancellationRequested)
+            {
+                if (GetCurrentProcessCpuPercent() <= maxCpuPercent)
+                    return;
+                Thread.Sleep(120);
+            }
+        }
+
+        private double GetCurrentProcessCpuPercent()
+        {
+            lock (cpuSampleLock)
+            {
+                DateTime nowUtc = DateTime.UtcNow;
+                TimeSpan nowCpu = Process.GetCurrentProcess().TotalProcessorTime;
+                TimeSpan wallDelta = nowUtc - cpuSampleWallClockUtc;
+
+                if (wallDelta.TotalMilliseconds < 250)
+                    return cachedProcessCpuPercent;
+
+                TimeSpan cpuDelta = nowCpu - cpuSampleProcessCpu;
+                double cpuPercent = 0;
+                if (wallDelta.TotalMilliseconds > 0 && Environment.ProcessorCount > 0)
+                {
+                    cpuPercent = (cpuDelta.TotalMilliseconds /
+                        (wallDelta.TotalMilliseconds * Environment.ProcessorCount)) * 100.0;
+                }
+
+                if (cpuPercent < 0)
+                    cpuPercent = 0;
+
+                cachedProcessCpuPercent = cpuPercent;
+                cpuSampleWallClockUtc = nowUtc;
+                cpuSampleProcessCpu = nowCpu;
+                return cachedProcessCpuPercent;
             }
         }
 
@@ -1836,6 +2000,7 @@ namespace NinjaTrader.Gui.NinjaScript
                         return false;
                     }
 
+                    ApplyChildProcessThrottle(process);
                     string stdOut = process.StandardOutput.ReadToEnd();
                     string stdErr = process.StandardError.ReadToEnd();
                     process.WaitForExit();
@@ -1848,13 +2013,20 @@ namespace NinjaTrader.Gui.NinjaScript
 
                     if (process.ExitCode != 0)
                     {
-                        error = !string.IsNullOrWhiteSpace(stdErr) ? stdErr.Trim() :
-                            (!string.IsNullOrWhiteSpace(stdOut) ? stdOut.Trim() : string.Format("Exit code {0}", process.ExitCode));
+                        error = !string.IsNullOrWhiteSpace(stdErr) ? FormatBridgeOutput(stdErr) :
+                            (!string.IsNullOrWhiteSpace(stdOut) ? FormatBridgeOutput(stdOut) : string.Format("Exit code {0}", process.ExitCode));
                         return false;
                     }
 
                     if (!string.IsNullOrWhiteSpace(stdOut))
-                        logout(string.Format("Parquet bridge output: {0}", stdOut.Trim()));
+                        logout(string.Format("Parquet bridge output:{0}{1}",
+                            Environment.NewLine,
+                            FormatBridgeOutput(stdOut)));
+
+                    if (!string.IsNullOrWhiteSpace(stdErr))
+                        logout(string.Format("Parquet bridge stderr:{0}{1}",
+                            Environment.NewLine,
+                            FormatBridgeOutput(stdErr)));
                 }
 
                 return true;
@@ -1864,6 +2036,385 @@ namespace NinjaTrader.Gui.NinjaScript
                 error = ex.Message;
                 return false;
             }
+        }
+
+        private void ApplyChildProcessThrottle(Process process)
+        {
+            if (!enableCpuThrottling || maxCpuPercent >= MAX_MAX_CPU_PERCENT || process == null)
+                return;
+
+            try
+            {
+                if (maxCpuPercent <= 30)
+                    process.PriorityClass = ProcessPriorityClass.Idle;
+                else
+                    process.PriorityClass = ProcessPriorityClass.BelowNormal;
+            }
+            catch
+            {
+                // Ignore priority failures on restricted environments.
+            }
+
+            try
+            {
+                int cpuCount = Environment.ProcessorCount;
+                if (cpuCount <= 1)
+                    return;
+
+                int targetCores = (int)Math.Ceiling(cpuCount * (maxCpuPercent / 100.0));
+                if (targetCores < 1)
+                    targetCores = 1;
+                if (targetCores > cpuCount)
+                    targetCores = cpuCount;
+
+                if (IntPtr.Size == 4)
+                {
+                    int maxBits = Math.Min(targetCores, 31);
+                    uint mask = 0;
+                    for (int i = 0; i < maxBits; i++)
+                        mask |= (uint)(1u << i);
+                    process.ProcessorAffinity = new IntPtr(unchecked((int)mask));
+                }
+                else
+                {
+                    int maxBits = Math.Min(targetCores, 63);
+                    ulong mask = 0;
+                    for (int i = 0; i < maxBits; i++)
+                        mask |= (1UL << i);
+                    process.ProcessorAffinity = new IntPtr(unchecked((long)mask));
+                }
+            }
+            catch
+            {
+                // Ignore affinity failures if OS/runtime blocks changes.
+            }
+        }
+
+        private static string FormatBridgeOutput(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return "";
+
+            string trimmed = text.Trim();
+            if (IsLikelyJson(trimmed))
+            {
+                string summary;
+                if (TrySummarizeJson(trimmed, out summary))
+                    return TruncateForLog(summary, 220);
+            }
+
+            return TruncateForLog(CollapseWhitespace(trimmed), 220);
+        }
+
+        private static bool IsLikelyJson(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return false;
+            char first = text[0];
+            return first == '{' || first == '[';
+        }
+
+        private static bool TrySummarizeJson(string json, out string summary)
+        {
+            summary = "";
+            try
+            {
+                if (json.StartsWith("{"))
+                {
+                    summary = SummarizeTopLevelJsonObject(json);
+                    return !string.IsNullOrWhiteSpace(summary);
+                }
+
+                if (json.StartsWith("["))
+                {
+                    summary = string.Format("json array ({0} item(s))", CountTopLevelArrayItems(json));
+                    return true;
+                }
+            }
+            catch
+            {
+                // Fall through and let caller use raw output.
+            }
+
+            return false;
+        }
+
+        private static string SummarizeTopLevelJsonObject(string json)
+        {
+            var pairs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            int i = 0;
+            SkipWhitespace(json, ref i);
+            if (i >= json.Length || json[i] != '{')
+                return "json object";
+            i++;
+
+            while (i < json.Length)
+            {
+                SkipWhitespace(json, ref i);
+                if (i >= json.Length) break;
+                if (json[i] == '}') break;
+                if (json[i] == ',')
+                {
+                    i++;
+                    continue;
+                }
+
+                string key;
+                if (!ReadJsonString(json, ref i, out key))
+                    break;
+
+                SkipWhitespace(json, ref i);
+                if (i >= json.Length || json[i] != ':')
+                    break;
+                i++;
+                SkipWhitespace(json, ref i);
+
+                string value = ReadTopLevelJsonValue(json, ref i);
+                if (!pairs.ContainsKey(key))
+                    pairs[key] = value;
+
+                SkipWhitespace(json, ref i);
+                if (i < json.Length && json[i] == ',')
+                    i++;
+            }
+
+            string[] priorityKeys = new[]
+            {
+                "status", "instrument", "date", "source_file", "sourceFile",
+                "relative_path", "relativePath", "output_file", "outputFile",
+                "rows", "records", "processed", "duration_ms", "durationMs", "message", "error"
+            };
+
+            var parts = new List<string>();
+            foreach (string key in priorityKeys)
+            {
+                if (!pairs.ContainsKey(key))
+                    continue;
+
+                string value = NormalizeSummaryValue(key, pairs[key]);
+                if (string.IsNullOrWhiteSpace(value))
+                    continue;
+
+                parts.Add(string.Format("{0}={1}", key, value));
+                if (parts.Count >= 4)
+                    break;
+            }
+
+            if (parts.Count == 0)
+                return string.Format("json object ({0} field(s))", pairs.Count);
+
+            return string.Join(", ", parts);
+        }
+
+        private static string NormalizeSummaryValue(string key, string value)
+        {
+            if (value == null)
+                return "";
+
+            string normalized = CollapseWhitespace(value.Trim().Trim('"'));
+            if (string.IsNullOrWhiteSpace(normalized))
+                return normalized;
+
+            if (key.IndexOf("path", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                key.IndexOf("file", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                try
+                {
+                    string name = Path.GetFileName(normalized);
+                    if (!string.IsNullOrWhiteSpace(name))
+                        normalized = name;
+                }
+                catch
+                {
+                    // Keep original value if path parsing fails.
+                }
+            }
+
+            return TruncateForLog(normalized, 48);
+        }
+
+        private static int CountTopLevelArrayItems(string json)
+        {
+            int i = 0;
+            SkipWhitespace(json, ref i);
+            if (i >= json.Length || json[i] != '[')
+                return 0;
+            i++;
+
+            int depth = 1;
+            bool inString = false;
+            bool escaped = false;
+            int count = 0;
+            bool hasValue = false;
+
+            for (; i < json.Length; i++)
+            {
+                char c = json[i];
+                if (inString)
+                {
+                    if (escaped) escaped = false;
+                    else if (c == '\\') escaped = true;
+                    else if (c == '"') inString = false;
+                    continue;
+                }
+
+                if (c == '"') { inString = true; hasValue = true; continue; }
+                if (c == '[' || c == '{') { depth++; hasValue = true; continue; }
+                if (c == ']' || c == '}')
+                {
+                    depth--;
+                    if (depth == 0)
+                        return hasValue ? count + 1 : count;
+                    continue;
+                }
+                if (depth == 1 && c == ',')
+                {
+                    count++;
+                    hasValue = false;
+                    continue;
+                }
+                if (!char.IsWhiteSpace(c) && depth == 1)
+                    hasValue = true;
+            }
+
+            return hasValue ? count + 1 : count;
+        }
+
+        private static string ReadTopLevelJsonValue(string json, ref int i)
+        {
+            if (i >= json.Length)
+                return "";
+
+            char c = json[i];
+            if (c == '"')
+            {
+                string s;
+                return ReadJsonString(json, ref i, out s) ? s : "";
+            }
+
+            if (c == '{' || c == '[')
+            {
+                int depth = 0;
+                bool inString = false;
+                bool escaped = false;
+                int start = i;
+                for (; i < json.Length; i++)
+                {
+                    char ch = json[i];
+                    if (inString)
+                    {
+                        if (escaped) escaped = false;
+                        else if (ch == '\\') escaped = true;
+                        else if (ch == '"') inString = false;
+                        continue;
+                    }
+
+                    if (ch == '"') inString = true;
+                    else if (ch == '{' || ch == '[') depth++;
+                    else if (ch == '}' || ch == ']')
+                    {
+                        depth--;
+                        if (depth == 0)
+                        {
+                            i++;
+                            break;
+                        }
+                    }
+                }
+                return json.Substring(start, Math.Max(0, i - start));
+            }
+
+            int tokenStart = i;
+            while (i < json.Length && json[i] != ',' && json[i] != '}')
+                i++;
+            return json.Substring(tokenStart, i - tokenStart).Trim();
+        }
+
+        private static bool ReadJsonString(string json, ref int i, out string value)
+        {
+            value = "";
+            if (i >= json.Length || json[i] != '"')
+                return false;
+            i++;
+
+            var chars = new List<char>();
+            bool escaped = false;
+            while (i < json.Length)
+            {
+                char c = json[i++];
+                if (escaped)
+                {
+                    switch (c)
+                    {
+                        case '"': chars.Add('"'); break;
+                        case '\\': chars.Add('\\'); break;
+                        case '/': chars.Add('/'); break;
+                        case 'b': chars.Add('\b'); break;
+                        case 'f': chars.Add('\f'); break;
+                        case 'n': chars.Add('\n'); break;
+                        case 'r': chars.Add('\r'); break;
+                        case 't': chars.Add('\t'); break;
+                        default: chars.Add(c); break;
+                    }
+                    escaped = false;
+                    continue;
+                }
+
+                if (c == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+                if (c == '"')
+                {
+                    value = new string(chars.ToArray());
+                    return true;
+                }
+                chars.Add(c);
+            }
+
+            return false;
+        }
+
+        private static void SkipWhitespace(string text, ref int i)
+        {
+            while (i < text.Length && char.IsWhiteSpace(text[i]))
+                i++;
+        }
+
+        private static string CollapseWhitespace(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return "";
+
+            var chars = new List<char>(text.Length);
+            bool prevSpace = false;
+            for (int i = 0; i < text.Length; i++)
+            {
+                char c = text[i];
+                if (char.IsWhiteSpace(c))
+                {
+                    if (!prevSpace)
+                        chars.Add(' ');
+                    prevSpace = true;
+                }
+                else
+                {
+                    chars.Add(c);
+                    prevSpace = false;
+                }
+            }
+
+            return new string(chars.ToArray()).Trim();
+        }
+
+        private static string TruncateForLog(string text, int maxLength)
+        {
+            if (string.IsNullOrEmpty(text) || text.Length <= maxLength)
+                return text;
+            if (maxLength <= 3)
+                return text.Substring(0, maxLength);
+            return text.Substring(0, maxLength - 3) + "...";
         }
 
         private static bool SplitCommand(string command, out string exe, out string args)
@@ -2143,6 +2694,17 @@ namespace NinjaTrader.Gui.NinjaScript
                             cbDeleteTempCsv.IsChecked = deleteTemp;
                     }
 
+                    XElement elEnableCpuThrottling = elRoot.Element("EnableCpuThrottling");
+                    if (elEnableCpuThrottling != null)
+                    {
+                        bool enabled;
+                        if (bool.TryParse(elEnableCpuThrottling.Value, out enabled))
+                        {
+                            enableCpuThrottling = enabled;
+                            cbEnableCpuThrottling.IsChecked = enabled;
+                        }
+                    }
+
                     XElement elParallelThreads = elRoot.Element("ParallelThreads");
                     if (elParallelThreads != null)
                     {
@@ -2153,6 +2715,19 @@ namespace NinjaTrader.Gui.NinjaScript
                             tbParallelThreads.Text = parsed.ToString();
                         }
                     }
+
+                    XElement elMaxCpuPercent = elRoot.Element("MaxCpuPercent");
+                    if (elMaxCpuPercent != null)
+                    {
+                        int parsed;
+                        if (int.TryParse(elMaxCpuPercent.Value, out parsed))
+                        {
+                            maxCpuPercent = parsed;
+                            tbMaxCpuPercent.Text = parsed.ToString();
+                        }
+                    }
+
+                    UpdateCpuThrottleUiState();
                 }
             }
         }
@@ -2160,6 +2735,7 @@ namespace NinjaTrader.Gui.NinjaScript
         public void Save(XDocument document, XElement element)
         {
             RefreshParallelThreadsFromUi();
+            RefreshMaxCpuPercentFromUi();
             element.Elements().Where(el => el.Name.LocalName.Equals("NRDToCSV")).Remove();
             XElement elRoot = new XElement("NRDToCSV");
             XElement elCsvRootDir = new XElement("CsvRootDir", tbCsvRootDir.Text);
@@ -2173,7 +2749,9 @@ namespace NinjaTrader.Gui.NinjaScript
             XElement elParquetBridgeWorkingDir = new XElement("ParquetBridgeWorkingDir", tbParquetBridgeWorkingDir.Text);
             XElement elEnableParquetPipeline = new XElement("EnableParquetPipeline", cbEnableParquetPipeline.IsChecked == true);
             XElement elDeleteTempCsv = new XElement("DeleteTempCsvOnSuccess", cbDeleteTempCsv.IsChecked == true);
+            XElement elEnableCpuThrottling = new XElement("EnableCpuThrottling", cbEnableCpuThrottling.IsChecked == true);
             XElement elParallelThreads = new XElement("ParallelThreads", parallelThreadsCount.ToString());
+            XElement elMaxCpuPercent = new XElement("MaxCpuPercent", maxCpuPercent.ToString());
             elRoot.Add(elCsvRootDir);
             elRoot.Add(elSelectedPaths);
             elRoot.Add(elParquetRootDir);
@@ -2181,7 +2759,9 @@ namespace NinjaTrader.Gui.NinjaScript
             elRoot.Add(elParquetBridgeWorkingDir);
             elRoot.Add(elEnableParquetPipeline);
             elRoot.Add(elDeleteTempCsv);
+            elRoot.Add(elEnableCpuThrottling);
             elRoot.Add(elParallelThreads);
+            elRoot.Add(elMaxCpuPercent);
             element.Add(elRoot);
         }
 
@@ -2212,10 +2792,12 @@ namespace NinjaTrader.Gui.NinjaScript
                 cbForceExport.IsEnabled = false;
                 cbEnableParquetPipeline.IsEnabled = false;
                 cbDeleteTempCsv.IsEnabled = false;
+                cbEnableCpuThrottling.IsEnabled = false;
                 tbParquetRootDir.IsReadOnly = true;
                 tbParquetBridgeCommand.IsReadOnly = true;
                 tbParquetBridgeWorkingDir.IsReadOnly = true;
                 tbParallelThreads.IsReadOnly = true;
+                tbMaxCpuPercent.IsReadOnly = true;
                 double margin = (double)FindResource("MarginBase");
                 lProgress.Margin = new Thickness(margin, 0, margin, 0);
                 lProgress.Height = 24;
@@ -2255,10 +2837,13 @@ namespace NinjaTrader.Gui.NinjaScript
                     cbForceExport.IsEnabled = true;
                     cbEnableParquetPipeline.IsEnabled = true;
                     cbDeleteTempCsv.IsEnabled = true;
+                    cbEnableCpuThrottling.IsEnabled = true;
                     tbParquetRootDir.IsReadOnly = false;
                     tbParquetBridgeCommand.IsReadOnly = false;
                     tbParquetBridgeWorkingDir.IsReadOnly = false;
                     tbParallelThreads.IsReadOnly = false;
+                    tbMaxCpuPercent.IsReadOnly = false;
+                    UpdateCpuThrottleUiState();
                     bAnalyze.IsEnabled = true;
                     bConvert.IsEnabled = true;
                     bConvert.Content = "_Convert";
@@ -2283,10 +2868,12 @@ namespace NinjaTrader.Gui.NinjaScript
                 cbForceExport.IsEnabled = false;
                 cbEnableParquetPipeline.IsEnabled = false;
                 cbDeleteTempCsv.IsEnabled = false;
+                cbEnableCpuThrottling.IsEnabled = false;
                 tbParquetRootDir.IsReadOnly = true;
                 tbParquetBridgeCommand.IsReadOnly = true;
                 tbParquetBridgeWorkingDir.IsReadOnly = true;
                 tbParallelThreads.IsReadOnly = true;
+                tbMaxCpuPercent.IsReadOnly = true;
                 double margin = (double)FindResource("MarginBase");
                 lProgress.Margin = new Thickness(margin, 0, margin, 0);
                 lProgress.Height = 24;
@@ -2318,10 +2905,13 @@ namespace NinjaTrader.Gui.NinjaScript
                 cbForceExport.IsEnabled = true;
                 cbEnableParquetPipeline.IsEnabled = true;
                 cbDeleteTempCsv.IsEnabled = true;
+                cbEnableCpuThrottling.IsEnabled = true;
                 tbParquetRootDir.IsReadOnly = false;
                 tbParquetBridgeCommand.IsReadOnly = false;
                 tbParquetBridgeWorkingDir.IsReadOnly = false;
                 tbParallelThreads.IsReadOnly = false;
+                tbMaxCpuPercent.IsReadOnly = false;
+                UpdateCpuThrottleUiState();
                 bAnalyze.IsEnabled = true;
                 bConvert.IsEnabled = true;
                 bConvert.Content = "_Close";
@@ -2617,7 +3207,9 @@ namespace NinjaTrader.Gui.NinjaScript
         public bool? ForceExport { get; set; }
         public bool? EnableParquetPipeline { get; set; }
         public bool? DeleteTempCsvOnSuccess { get; set; }
+        public bool? EnableCpuThrottling { get; set; }
         public int? ParallelThreads { get; set; }
+        public int? MaxCpuPercent { get; set; }
         public List<string> SelectedPaths { get; set; } = new List<string>();
 
         public int EntryCount => entries.Count;
@@ -2696,11 +3288,25 @@ namespace NinjaTrader.Gui.NinjaScript
                                 DeleteTempCsvOnSuccess = parsed;
                             continue;
                         }
+                        if (line.StartsWith("#ENABLECPUTHROTTLING:"))
+                        {
+                            bool parsed;
+                            if (bool.TryParse(line.Substring(21).Trim(), out parsed))
+                                EnableCpuThrottling = parsed;
+                            continue;
+                        }
                         if (line.StartsWith("#PARALLELTHREADS:"))
                         {
                             int parsed;
                             if (int.TryParse(line.Substring(17).Trim(), out parsed) && parsed > 0)
                                 ParallelThreads = parsed;
+                            continue;
+                        }
+                        if (line.StartsWith("#MAXCPUPERCENT:"))
+                        {
+                            int parsed;
+                            if (int.TryParse(line.Substring(15).Trim(), out parsed))
+                                MaxCpuPercent = parsed;
                             continue;
                         }
                         if (line.StartsWith("#SELECTEDPATH:"))
@@ -2749,8 +3355,12 @@ namespace NinjaTrader.Gui.NinjaScript
                             writer.WriteLine("#ENABLEPARQUETPIPELINE:" + EnableParquetPipeline.Value.ToString().ToLowerInvariant());
                         if (DeleteTempCsvOnSuccess.HasValue)
                             writer.WriteLine("#DELETETEMPCSV:" + DeleteTempCsvOnSuccess.Value.ToString().ToLowerInvariant());
+                        if (EnableCpuThrottling.HasValue)
+                            writer.WriteLine("#ENABLECPUTHROTTLING:" + EnableCpuThrottling.Value.ToString().ToLowerInvariant());
                         if (ParallelThreads.HasValue && ParallelThreads.Value > 0)
                             writer.WriteLine("#PARALLELTHREADS:" + ParallelThreads.Value);
+                        if (MaxCpuPercent.HasValue)
+                            writer.WriteLine("#MAXCPUPERCENT:" + MaxCpuPercent.Value);
                         foreach (string selectedPath in SelectedPaths.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct())
                             writer.WriteLine("#SELECTEDPATH:" + selectedPath);
                         writer.WriteLine("# Instrument\tDate\tStatus\tNrdSize\tNrdModified\tCsvRecords\tLastTimestamp\tLastOffset\tExportedAt");

@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-02-27
+### Added
+- Optional CPU throttling setting in the UI (enabled by default) with configurable max CPU percentage
+
+### Changed
+- Conversion scheduling now uses a queue-based worker model with process CPU-aware pacing
+- CPU throttling now also applies to the Parquet bridge child process (Python) via lower priority and constrained CPU affinity
+
+### Fixed
+- Parquet bridge stdout/stderr log output now uses compact JSON summaries to reduce scrolling and log noise
+
 ## [1.4.2] - 2026-02-22
 ### Changed
 - Analyze mode now switches to Parquet-aware behavior when pipeline mode is enabled
@@ -77,7 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ability to specify output `*.csv` root directory
 - Filter of `*.nrd` file names to convert based on RedExp
 
-[Unreleased]: https://github.com/eugeneilyin/nrdtocsv/compare/v1.4.2...HEAD
+[Unreleased]: https://github.com/eugeneilyin/nrdtocsv/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/eugeneilyin/nrdtocsv/compare/v1.4.2...v1.5.0
 [1.4.2]: https://github.com/eugeneilyin/nrdtocsv/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/eugeneilyin/nrdtocsv/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/eugeneilyin/nrdtocsv/compare/v1.3.0...v1.4.0

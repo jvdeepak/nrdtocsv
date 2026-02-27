@@ -41,6 +41,14 @@ Leave the file list empty to convert all `.nrd` files in the default replay fold
 - Click **Cancel** to stop conversion at any time (stops within seconds)
 - After completion, click **Close** to exit or **Clear** to start a new batch
 
+## Performance Controls
+
+- **Parallel workers (1+)** controls how many files are processed concurrently.
+- **Enable CPU throttling** is enabled by default and helps reduce fan spikes.
+- **Max CPU usage %** sets a target ceiling for this AddOn process during conversion.
+- In Parquet pipeline mode, the same throttling setting is also applied to the Python bridge process.
+- JSON output from the bridge is summarized into compact one-line log entries.
+
 ## Converted `*.csv` file format
 
 ### Content example
